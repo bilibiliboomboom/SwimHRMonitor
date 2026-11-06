@@ -27,7 +27,7 @@ public class MainActivity extends Activity {
     final Map<String,ArrayList<Point>> live=new LinkedHashMap<>();
     final ArrayList<String> scanFound=new ArrayList<>();
     BluetoothAdapter adapter; BluetoothLeScanner scanner; boolean scanning=false, aligned=false;
-    long alignedStart=0; String activeSession=""; Store store; LinearLayout root,deviceBox; TextView summary,clock; Button scanBtn,recordBtn; Curve curve; TabHost tabs;
+    long alignedStart=0; String activeSession=""; Store store; LinearLayout root; GridLayout deviceBox; TextView summary,clock; int gridColumns=2; Button scanBtn,recordBtn; Curve curve; TabHost tabs;
     static class Point { long t; int bpm; Point(long t,int b){this.t=t;this.bpm=b;} }
     static class Sensor { String id,name; int bpm=-1,battery=-1; long last=0; String state="未连接"; Sensor(String i,String n){id=i;name=n;} }
     @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(128);setRequestedOrientation(0);store=new Store(this); BluetoothManager bm=(BluetoothManager)getSystemService(BLUETOOTH_SERVICE);adapter=bm==null?null:bm.getAdapter(); build(); permissions(); }
@@ -36,14 +36,30 @@ public class MainActivity extends Activity {
     Button button(String s){Button b=new Button(this);b.setText(s);b.setAllCaps(false);b.setTextSize(13);return b;}
     LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
     LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    int color(String hex){return Color.parseColor(hex);}
+    GradientDrawable panel(String fill,String stroke){GradientDrawable g=new GradientDrawable();g.setColor(color(fill));g.setCornerRadius(d(14));g.setStroke(d(1),color(stroke));return g;}
+    TextView txt(String s,int size,String col){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color(col));return t;}
     void build(){
-        root=column();root.setPadding(d(12),d(8),d(12),d(8));root.setBackgroundColor(Color.rgb(242,245,249));
-        LinearLayout top=row();TextView title=label("SWIM HR  多设备心率监测",21);title.setTypeface(null,1);top.addView(title,new LinearLayout.LayoutParams(0,-2,1));clock=label("00:00",13);top.addView(clock);root.addView(top);
-        summary=label("正在初始化…",12);root.addView(summary);
-        LinearLayout actions=row();scanBtn=button("扫描设备");scanBtn.setOnClickListener(v->scan());actions.addView(scanBtn,new LinearLayout.LayoutParams(0,d(44),1));
-        recordBtn=button("开始同步记录");recordBtn.setOnClickListener(v->toggleAligned());actions.addView(recordBtn,new LinearLayout.LayoutParams(0,d(44),1));
-        Button menu=button("更多 ▾");menu.setOnClickListener(v->more());actions.addView(menu,new LinearLayout.LayoutParams(0,d(44),1));root.addView(actions);
-        ScrollView sv=new ScrollView(this);deviceBox=column();sv.addView(deviceBox);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
+        getWindow().setStatusBarColor(color("#101923"));getWindow().setNavigationBarColor(color("#101923"));
+        root=column();root.setPadding(d(14),d(8),d(14),d(8));root.setBackgroundColor(color("#101923"));
+        LinearLayout top=row();TextView brand=txt("SWIM  /  HR",22,"#F4F8FC");brand.setTypeface(null,1);top.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        clock=txt("00:00:00",14,"#91A4B8");top.addView(clock);root.addView(top);
+        TextView subtitle=txt("MULTI-ATHLETE LIVE MONITOR",10,"#6E849B");subtitle.setLetterSpacing(.16f);root.addView(subtitle);
+        LinearLayout status=row();status.setPadding(0,d(8),0,d(10));
+        summary=txt("等待连接心率设备",12,"#AFC0D0");status.addView(summary,new LinearLayout.LayoutParams(0,-2,1));
+        TextView liveTag=txt("● LIVE",11,"#39D99A");status.addView(liveTag);root.addView(status);
+        LinearLayout actions=row();scanBtn=button("＋ 添加设备");scanBtn.setTextColor(color("#FFFFFF"));scanBtn.setBackground(panel("#176B55","#23866C"));scanBtn.setOnClickListener(v->scan());
+        actions.addView(scanBtn,new LinearLayout.LayoutParams(0,d(44),1));
+        recordBtn=button("▶ 开始同步");recordBtn.setTextColor(color("#FFFFFF"));recordBtn.setBackground(panel("#245B9B","#3478BD"));recordBtn.setOnClickListener(v->toggleAligned());
+        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(0,d(44),1);rp.leftMargin=d(8);actions.addView(recordBtn,rp);
+        Button moreBtn=button("⋯");moreBtn.setTextColor(color("#E6EEF7"));moreBtn.setBackground(panel("#202D3B","#34475B"));LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(d(54),d(44));mp.leftMargin=d(8);actions.addView(moreBtn,mp);moreBtn.setOnClickListener(v->more());root.addView(actions);
+        LinearLayout nav=row();nav.setPadding(0,d(8),0,d(8));
+        String[] navs={"实时监测","曲线","训练记录","数据分析"};
+        for(int i=0;i<navs.length;i++){final int ix=i;Button b=button(navs[i]);b.setTextSize(11);b.setTextColor(color(i==0?"#5BE0AE":"#A9B8C8"));b.setBackground(panel(i==0?"#1B342F":"#17232F",i==0?"#2E765F":"#263747"));LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(0,d(38),1);if(i>0)np.leftMargin=d(5);nav.addView(b,np);b.setOnClickListener(v->{if(ix==1)showCurve();else if(ix==2)history();else if(ix==3)analysis();});}
+        root.addView(nav);
+        TextView section=txt("运动员心率  /  ATHLETE HEART RATE",11,"#7F94A9");section.setPadding(d(2),d(8),0,d(8));root.addView(section);
+        ScrollView sv=new ScrollView(this);sv.setFillViewport(true);deviceBox=new GridLayout(this);deviceBox.setAlignmentMode(GridLayout.ALIGN_BOUNDS);deviceBox.setUseDefaultMargins(false);sv.addView(deviceBox);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
+        TextView foot=txt("数据仅用于训练观察  ·  BLE 心率设备",9,"#52677C");foot.setGravity(Gravity.CENTER);foot.setPadding(0,d(7),0,0);root.addView(foot);
         setContentView(root);renderSensors();refresh();
         h.post(new Runnable(){public void run(){clock.setText(new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date()));h.postDelayed(this,1000);}});
     }
@@ -64,7 +80,27 @@ public class MainActivity extends Activity {
     }
     void setState(String id,String state){runOnUiThread(()->{Sensor s=sensors.get(id);if(s!=null)s.state=state;renderSensors();refresh();});}
     void parse(String id,byte[] v){if(v==null||v.length<2)return;int flags=v[0]&255;int bpm=(flags&1)!=0&&v.length>=3?((v[1]&255)|((v[2]&255)<<8)):(v[1]&255);if(bpm<1||bpm>250)return;long now=System.currentTimeMillis();Sensor s=sensors.get(id);if(s==null)return;s.bpm=bpm;s.last=now;s.state="实时接收";store.sample(activeSession,id,s.name,now,bpm);ArrayList<Point> list=live.computeIfAbsent(id,k->new ArrayList<>());list.add(new Point(now,bpm));while(list.size()>180)list.remove(0);runOnUiThread(()->{renderSensors();if(curve!=null)curve.invalidate();refresh();});}
-    void renderSensors(){if(deviceBox==null)return;deviceBox.removeAllViews();for(Sensor s:sensors.values()){LinearLayout card=column();card.setPadding(d(12),d(8),d(12),d(8));card.setBackgroundColor(s.bpm>0&&System.currentTimeMillis()-s.last<10000?Color.rgb(224,246,235):Color.WHITE);LinearLayout line=row();TextView nm=label(s.name,16);nm.setTypeface(null,1);line.addView(nm,new LinearLayout.LayoutParams(0,-2,1));TextView bpm=label(s.bpm<0?"--":s.bpm+" BPM",27);bpm.setTextColor(Color.rgb(15,125,82));bpm.setTypeface(null,1);line.addView(bpm);card.addView(line);String detail=s.state+"   ·   "+s.id+(s.battery>=0?"   ·   电量 "+s.battery+"%":"");card.addView(label(detail,11));LinearLayout buttons=row();Button rename=button("改名");rename.setOnClickListener(v->rename(s));buttons.addView(rename);Button disconnect=button(gatts.containsKey(s.id)?"断开":"连接");disconnect.setOnClickListener(v->{if(gatts.containsKey(s.id))disconnect(s.id);else connect(s.id);});buttons.addView(disconnect);Button remove=button("移除");remove.setOnClickListener(v->{disconnect(s.id);sensors.remove(s.id);live.remove(s.id);renderSensors();refresh();});buttons.addView(remove);card.addView(buttons);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,d(5),0,d(5));deviceBox.addView(card,cp);}if(sensors.isEmpty()){TextView empty=label("尚未添加设备。点击「扫描设备」搜索支持 BLE 0x180D 的心率传感器。",15);empty.setPadding(d(16),d(30),d(16),d(30));deviceBox.addView(empty);}}
+    void renderSensors(){
+        if(deviceBox==null)return;deviceBox.removeAllViews();
+        int width=(int)(getResources().getDisplayMetrics().widthPixels/getResources().getDisplayMetrics().density);
+        gridColumns=width>=1350?4:width>=950?3:2;deviceBox.setColumnCount(gridColumns);
+        int index=0;
+        for(Sensor s:sensors.values()){
+            boolean fresh=s.bpm>0&&System.currentTimeMillis()-s.last<10000;
+            LinearLayout card=column();card.setPadding(d(13),d(11),d(13),d(10));card.setBackground(panel(fresh?"#172F2A":"#192634",fresh?"#286A55":"#2A3B4E"));
+            LinearLayout head=row();TextView name=txt(s.name,15,"#EAF1F8");name.setTypeface(null,1);head.addView(name,new LinearLayout.LayoutParams(0,-2,1));
+            TextView dot=txt(fresh?"● LIVE":"○ WAIT",9,fresh?"#4CE0A5":"#8194A8");head.addView(dot);card.addView(head);
+            TextView bpm=txt(s.bpm<0?"--":String.valueOf(s.bpm),42,fresh?"#54E0A8":"#DCE6F0");bpm.setTypeface(null,1);bpm.setGravity(Gravity.CENTER);bpm.setPadding(0,d(4),0,0);card.addView(bpm);
+            TextView unit=txt("BPM",10,"#8DA1B5");unit.setGravity(Gravity.CENTER);card.addView(unit);
+            TextView state=txt(s.state+(s.battery>=0?"   ·   电量 "+s.battery+"%":""),10,"#91A5B9");state.setGravity(Gravity.CENTER);state.setPadding(0,d(5),0,d(7));card.addView(state);
+            View divider=new View(this);divider.setBackgroundColor(color("#2C4052"));card.addView(divider,new LinearLayout.LayoutParams(-1,d(1)));
+            LinearLayout controls=row();Button rename=button("改名");rename.setTextSize(10);rename.setTextColor(color("#B7C7D7"));rename.setBackgroundColor(Color.TRANSPARENT);rename.setOnClickListener(v->rename(s));controls.addView(rename,new LinearLayout.LayoutParams(0,d(34),1));
+            Button connect=button(gatts.containsKey(s.id)?"断开":"连接");connect.setTextSize(10);connect.setTextColor(color("#58DDA7"));connect.setBackgroundColor(Color.TRANSPARENT);connect.setOnClickListener(v->{if(gatts.containsKey(s.id))disconnect(s.id);else connect(s.id);});controls.addView(connect,new LinearLayout.LayoutParams(0,d(34),1));
+            Button remove=button("移除");remove.setTextSize(10);remove.setTextColor(color("#D58D8D"));remove.setBackgroundColor(Color.TRANSPARENT);remove.setOnClickListener(v->{disconnect(s.id);sensors.remove(s.id);live.remove(s.id);renderSensors();refresh();});controls.addView(remove,new LinearLayout.LayoutParams(0,d(34),1));card.addView(controls);
+            GridLayout.LayoutParams gp=new GridLayout.LayoutParams(GridLayout.spec(index/gridColumns),GridLayout.spec(index%gridColumns,1f));gp.width=0;gp.height=-2;gp.setMargins(d(4),d(4),d(4),d(4));deviceBox.addView(card,gp);index++;
+        }
+        if(sensors.isEmpty()){TextView empty=txt("尚无运动员设备\n\n点击「添加设备」搜索 BLE 心率设备。\n连接后，心率数据会显示在独立监测卡片中。",16,"#91A5B9");empty.setGravity(Gravity.CENTER);empty.setPadding(d(20),d(45),d(20),d(45));GridLayout.LayoutParams ep=new GridLayout.LayoutParams();ep.width=-1;ep.height=-2;ep.columnSpec=GridLayout.spec(0,gridColumns);deviceBox.addView(empty,ep);}
+    }
     void rename(Sensor s){EditText e=new EditText(this);e.setText(s.name);new AlertDialog.Builder(this).setTitle("运动员 / 设备名称").setView(e).setPositiveButton("保存",(a,b)->{s.name=e.getText().toString().trim();if(s.name.isEmpty())s.name="运动员";store.rename(s.id,s.name);renderSensors();}).setNegativeButton("取消",null).show();}
     void disconnect(String id){BluetoothGatt g=gatts.remove(id);if(g!=null){try{g.disconnect();g.close();}catch(Exception ignored){}}Sensor s=sensors.get(id);if(s!=null){s.state="已断开";s.bpm=-1;}renderSensors();refresh();}
     void toggleAligned(){if(!aligned){if(gatts.size()<2){toast("至少连接两台设备才能开始同步对比记录");return;}aligned=true;alignedStart=System.currentTimeMillis();activeSession=store.newSession("同步对比",alignedStart);recordBtn.setText("停止同步记录");toast("同步记录已开始");}else{aligned=false;store.endSession(activeSession,System.currentTimeMillis());activeSession="";recordBtn.setText("开始同步记录");new AlertDialog.Builder(this).setTitle("记录已保存").setMessage("本次同步记录已保存在本机。").setItems(new String[]{"导出 Excel","导出 CSV","分析数据","查看历史","完成"},(a,w)->{if(w==0)export(true);else if(w==1)export(false);else if(w==2)analysis();else if(w==3)history();}).show();}}
@@ -96,7 +132,7 @@ public class MainActivity extends Activity {
     void put(ZipOutputStream z,String n,String v)throws Exception{z.putNextEntry(new ZipEntry(n));z.write(v.getBytes("UTF-8"));z.closeEntry();}
     String xml(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     String colName(int n){String s="";while(n>0){int r=(n-1)%26;s=(char)('A'+r)+s;n=(n-1)/26;}return s;}
-    void refresh(){int active=0;for(Sensor s:sensors.values())if(s.bpm>0&&System.currentTimeMillis()-s.last<10000)active++;summary.setText("已发现 "+sensors.size()+" 台  ·  已连接 "+gatts.size()+" 台  ·  正在接收 "+active+" 台"+(aligned?"  ·  ● 同步记录中":""));}
+    void refresh(){int active=0;for(Sensor s:sensors.values())if(s.bpm>0&&System.currentTimeMillis()-s.last<10000)active++;summary.setText("设备 "+sensors.size()+"  /  已连接 "+gatts.size()+"  /  实时数据 "+active+(aligned?"  /  ● 同步记录中":""));}
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     @Override protected void onDestroy(){stopScan();for(BluetoothGatt g:new ArrayList<>(gatts.values())){try{g.disconnect();g.close();}catch(Exception ignored){}}super.onDestroy();}
     class Store extends SQLiteOpenHelper{
