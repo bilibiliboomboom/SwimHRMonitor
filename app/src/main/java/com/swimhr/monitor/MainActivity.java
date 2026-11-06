@@ -64,7 +64,16 @@ public class MainActivity extends Activity {
         for(int i=0;i<navs.length;i++){final int ix=i;Button b=button(navs[i]);b.setTextSize(11);b.setTextColor(color(i==0?"#5BE0AE":"#A9B8C8"));b.setBackground(panel(i==0?"#1B342F":"#17232F",i==0?"#2E765F":"#263747"));LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(0,d(38),1);if(i>0)np.leftMargin=d(5);nav.addView(b,np);b.setOnClickListener(v->{if(ix==1)showCurve();else if(ix==2)history();else if(ix==3)analysis();});}
         root.addView(nav);
         TextView section=txt("运动员心率  /  ATHLETE HEART RATE",11,"#7F94A9");section.setPadding(d(2),d(8),0,d(8));root.addView(section);
-        ScrollView sv=new ScrollView(this);sv.setFillViewport(true);deviceBox=new GridLayout(this);deviceBox.setAlignmentMode(GridLayout.ALIGN_BOUNDS);deviceBox.setUseDefaultMargins(false);sv.addView(deviceBox);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
+        ScrollView sv=new ScrollView(this);sv.setFillViewport(true);
+        LinearLayout monitorContent=column();monitorContent.setPadding(0,0,0,d(10));
+        deviceBox=new GridLayout(this);deviceBox.setAlignmentMode(GridLayout.ALIGN_BOUNDS);deviceBox.setUseDefaultMargins(false);
+        monitorContent.addView(deviceBox,new LinearLayout.LayoutParams(-1,-2));
+        LinearLayout chartPanel=column();chartPanel.setPadding(d(12),d(10),d(12),d(10));chartPanel.setBackground(panel("#172431","#2B4052"));
+        LinearLayout chartHead=row();TextView chartTitle=txt("实时心率趋势",13,"#EAF2F8");chartTitle.setTypeface(null,1);chartHead.addView(chartTitle,new LinearLayout.LayoutParams(0,-2,1));
+        TextView chartWindow=txt("最近 2 分钟",10,"#8298AD");chartHead.addView(chartWindow);chartPanel.addView(chartHead);
+        curve=new Curve(this);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,d(210));cp.topMargin=d(6);chartPanel.addView(curve,cp);
+        monitorContent.addView(chartPanel,new LinearLayout.LayoutParams(-1,-2));
+        sv.addView(monitorContent);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
         TextView foot=txt("数据仅用于训练观察  ·  BLE 心率设备",9,"#52677C");foot.setGravity(Gravity.CENTER);foot.setPadding(0,d(7),0,0);root.addView(foot);
         setContentView(root);renderSensors();refresh();
         h.post(new Runnable(){public void run(){clock.setText(new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date()));h.postDelayed(this,1000);}});
@@ -249,7 +258,24 @@ public class MainActivity extends Activity {
     void toggleAligned(){if(!aligned){if(gatts.size()<2){toast("至少连接两台设备才能开始同步对比记录");return;}aligned=true;alignedStart=System.currentTimeMillis();activeSession=store.newSession("同步对比",alignedStart);recordBtn.setText("停止同步记录");toast("同步记录已开始");}else{aligned=false;store.endSession(activeSession,System.currentTimeMillis());activeSession="";recordBtn.setText("开始同步记录");new AlertDialog.Builder(this).setTitle("记录已保存").setMessage("本次同步记录已保存在本机。").setItems(new String[]{"导出 Excel","导出 CSV","分析数据","查看历史","完成"},(a,w)->{if(w==0)export(true);else if(w==1)export(false);else if(w==2)analysis();else if(w==3)history();}).show();}}
     void more(){String[] items={"实时曲线","历史记录","数据分析","导出 CSV","导出 Excel","断开全部设备","关于 / 使用说明"};new AlertDialog.Builder(this).setTitle("功能").setItems(items,(a,w)->{if(w==0)showCurve();if(w==1)history();if(w==2)analysis();if(w==3)export(false);if(w==4)export(true);if(w==5){for(String id:new ArrayList<>(gatts.keySet()))disconnect(id);}if(w==6)new AlertDialog.Builder(this).setTitle("SWIM HR").setMessage("支持标准 BLE 心率服务 0x180D。单设备连接后自动记录；两台及以上设备可启动同步对比记录。数据默认保存在本机。仅用于训练观察和设备评估，不用于医疗诊断。").setPositiveButton("知道了",null).show();}).show();}
     void showCurve(){LinearLayout box=column();curve=new Curve(this);box.addView(curve,new LinearLayout.LayoutParams(-1,d(310)));new AlertDialog.Builder(this).setTitle("实时心率曲线").setView(box).setPositiveButton("关闭",null).show();}
-    class Curve extends View{Paint p=new Paint(3);Curve(Context c){super(c);setBackgroundColor(0xff14212d);}protected void onDraw(Canvas c){super.onDraw(c);float w=getWidth(),hh=getHeight();p.setColor(0xff14212d);c.drawRect(0,0,w,hh,p);p.setColor(0xff304354);p.setStrokeWidth(1);for(int i=0;i<5;i++){float y=20+i*(hh-40)/4;c.drawLine(42,y,w-8,y,p);}p.setColor(0xff91a5b8);p.setTextSize(11);for(int i=0;i<5;i++)c.drawText(""+(200-i*40),4,24+i*(hh-40)/4,p);int[] colors={0xff55d9a7,0xff66a9f2,0xffffbd68,0xffc89af2,0xffff8585,0xff63cbd1,0xffe4df70,0xff8da8ff};int ix=0;for(ArrayList<Point> pts:live.values()){if(pts.size()<2){ix++;continue;}p.setColor(colors[ix++%colors.length]);p.setStrokeWidth(2.8f);long min=pts.get(0).t,max=pts.get(pts.size()-1).t;for(int j=1;j<pts.size();j++){Point a=pts.get(j-1),b=pts.get(j);float x1=42+(a.t-min)/(float)Math.max(1,max-min)*(w-55),x2=42+(b.t-min)/(float)Math.max(1,max-min)*(w-55);float y1=hh-15-a.bpm/220f*(hh-30),y2=hh-15-b.bpm/220f*(hh-30);c.drawLine(x1,y1,x2,y2,p);}}}}
+    class Curve extends View{
+        final Paint p=new Paint(3);
+        final int[] colors={0xff55d9a7,0xff66a9f2,0xffffbd68,0xffc89af2,0xffff8585,0xff63cbd1,0xffe4df70,0xff8da8ff};
+        Curve(Context c){super(c);setLayerType(View.LAYER_TYPE_SOFTWARE,null);}
+        protected void onDraw(Canvas c){
+            super.onDraw(c);float w=getWidth(),hh=getHeight();c.drawColor(0xff172431);
+            float left=d(34),right=w-d(8),top=d(10),bottom=hh-d(24);
+            p.setStrokeWidth(1);p.setColor(0xff304354);
+            for(int bpm=40;bpm<=200;bpm+=40){float y=bottom-(bpm-40)/160f*(bottom-top);c.drawLine(left,y,right,y,p);p.setColor(0xff91a5b8);p.setTextSize(d(9));c.drawText(String.valueOf(bpm),d(2),y+d(3),p);p.setColor(0xff304354);}
+            p.setTextSize(d(9));p.setColor(0xff8298ad);c.drawText("-2 min",left,bottom+d(17),p);c.drawText("现在",right-d(24),bottom+d(17),p);
+            long now=System.currentTimeMillis(),min=now-120000L;int ix=0;
+            for(Map.Entry<String,ArrayList<Point>> entry:live.entrySet()){
+                int col=colors[ix++%colors.length];ArrayList<Point> pts=entry.getValue();p.setColor(col);p.setStrokeWidth(d(2.3f));p.setStyle(Paint.Style.STROKE);
+                Point prev=null;for(Point pt:pts){if(pt.t<min||pt.t>now)continue;if(prev!=null&&pt.t-prev.t<=15000){float x1=left+(prev.t-min)/120000f*(right-left),x2=left+(pt.t-min)/120000f*(right-left);float y1=bottom-(prev.bpm-40)/160f*(bottom-top),y2=bottom-(pt.bpm-40)/160f*(bottom-top);c.drawLine(x1,y1,x2,y2,p);}prev=pt;}
+                p.setStyle(Paint.Style.FILL);
+            }
+        }
+    }
     void history(){ArrayList<String> rows=store.sessions();if(rows.isEmpty()){toast("暂无历史记录");return;}new AlertDialog.Builder(this).setTitle("历史训练记录").setItems(rows.toArray(new String[0]),(a,w)->{String id=rows.get(w).split("  ")[0];activeSession=id;analysis();}).setNegativeButton("关闭",null).show();}
     void analysis(){ArrayList<String> ids=store.deviceIds(activeSession);if(ids.size()<2){toast("当前记录中至少需要两台设备的数据");return;}final ArrayList<String> compareIds=ids;String[] names=new String[compareIds.size()];for(int i=0;i<compareIds.size();i++){Sensor s=sensors.get(compareIds.get(i));names[i]=s==null?compareIds.get(i):s.name;}new AlertDialog.Builder(this).setTitle("选择参考设备").setItems(names,(a,w)->{String ref=compareIds.get(w);String other=compareIds.get(w==0?1:0);Stats st=store.compare(activeSession,ref,other);if(st.n<3){toast("有效配对样本不足（至少3组）");return;}String msg="样本数："+st.n+"\nPearson 相关系数 r："+String.format(Locale.US,"%.4f",st.r)+"\n平均差值（A-B）："+String.format(Locale.US,"%.2f",st.bias)+" BPM\n95% 一致性界限："+String.format(Locale.US,"%.2f",st.low)+" 至 "+String.format(Locale.US,"%.2f",st.high)+" BPM\n\nPearson 衡量线性相关；Bland-Altman 衡量一致性。结果受采样频率和时间对齐影响。";new AlertDialog.Builder(this).setTitle("设备对比分析").setMessage(msg).setPositiveButton("确定",null).show();}).setNegativeButton("取消",null).show();}
     static class Stats{int n;double r,bias,low,high;}
