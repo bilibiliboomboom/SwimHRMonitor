@@ -48,7 +48,7 @@ jobs:
       - name: Fix Android compile error
         run: |
           sed -i 's/View.SYSTEM_UI_FLAG_KEEP_SCREEN_ON/0/g' app/src/main/java/com/swimhr/monitor/MainActivity.java
-          - name: Build debug APK
+      - name: Build debug APK
         run: |
           gradle --version
           gradle assembleDebug --stacktrace
