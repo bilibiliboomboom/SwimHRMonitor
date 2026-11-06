@@ -27,6 +27,7 @@ public class MainActivity extends Activity {
     final Map<String,Sensor> sensors=new LinkedHashMap<>();
     final Map<String,ArrayList<Point>> live=new LinkedHashMap<>();
     final ArrayList<String> scanFound=new ArrayList<>();
+    final Map<String,String> scanNames=new LinkedHashMap<>();
     final Set<String> userDisconnected=new HashSet<>();
     final Map<String,Integer> reconnectAttempts=new HashMap<>();
     final Map<String,Runnable> reconnectTasks=new HashMap<>();
@@ -70,10 +71,28 @@ public class MainActivity extends Activity {
     }
     void permissions(){ArrayList<String> p=new ArrayList<>();if(Build.VERSION.SDK_INT>=31){if(checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)!=0)p.add(Manifest.permission.BLUETOOTH_SCAN);if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=0)p.add(Manifest.permission.BLUETOOTH_CONNECT);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=0)p.add(Manifest.permission.POST_NOTIFICATIONS);}else if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=0)p.add(Manifest.permission.ACCESS_FINE_LOCATION);if(!p.isEmpty())requestPermissions(p.toArray(new String[0]),88);}
     boolean permitted(){return Build.VERSION.SDK_INT>=31?checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)==0&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==0:checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==0;}
-    void scan(){if(scanning){stopScan();return;}if(!permitted()){permissions();return;}if(adapter==null||!adapter.isEnabled()){toast("请打开蓝牙");return;}scanner=adapter.getBluetoothLeScanner();if(scanner==null){toast("无法启动 BLE 扫描");return;}scanFound.clear();try{scanner.startScan(scanCb);scanning=true;scanBtn.setText("停止扫描");toast("正在搜索标准心率设备");h.postDelayed(()->{if(scanning)stopScan();},15000);}catch(Exception e){toast("扫描失败："+e.getMessage());}}
-    void stopScan(){try{if(scanner!=null&&scanning)scanner.stopScan(scanCb);}catch(Exception ignored){}scanning=false;scanBtn.setText("扫描设备");}
-    ScanCallback scanCb=new ScanCallback(){@Override public void onScanResult(int type,ScanResult r){BluetoothDevice dev=r.getDevice();String id;String name;try{id=dev.getAddress();name=dev.getName();}catch(Exception e){return;}if(gatts.containsKey(id)||scanFound.contains(id))return;boolean hr=false;if(r.getScanRecord()!=null&&r.getScanRecord().getServiceUuids()!=null)for(android.os.ParcelUuid u:r.getScanRecord().getServiceUuids())if(HR.equals(u.getUuid()))hr=true;if(!hr)return;scanFound.add(id);String saved=store.savedName(id);Sensor s=new Sensor(id,saved==null?((name==null||name.isEmpty())?"小米手环 / BLE 心率设备":name):saved);sensors.put(id,s);runOnUiThread(()->showFound(s));}};
-    void showFound(Sensor s){new AlertDialog.Builder(this).setTitle("发现心率设备").setMessage(s.name+"\n"+s.id+"\n是否连接？").setPositiveButton("连接",(a,b)->connect(s.id)).setNegativeButton("稍后",null).show();renderSensors();refresh();}
+    void scan(){if(scanning){stopScan();return;}if(!permitted()){permissions();return;}if(adapter==null||!adapter.isEnabled()){toast("请打开蓝牙");return;}scanner=adapter.getBluetoothLeScanner();if(scanner==null){toast("无法启动 BLE 扫描");return;}scanFound.clear();scanNames.clear();try{scanner.startScan(scanCb);scanning=true;scanBtn.setText("停止扫描");toast("正在搜索标准心率设备");h.postDelayed(()->{if(scanning)stopScan();},15000);}catch(Exception e){toast("扫描失败："+e.getMessage());}}
+    void stopScan(){boolean was=scanning;try{if(scanner!=null&&scanning)scanner.stopScan(scanCb);}catch(Exception ignored){}scanning=false;if(scanBtn!=null)scanBtn.setText("＋ 添加设备");if(was&&!scanFound.isEmpty()&&!isFinishing())showScanResults();}
+    void showScanResults(){
+        ArrayList<String> ids=new ArrayList<>(scanFound);if(ids.isEmpty())return;
+        String[] labels=new String[ids.size()];boolean[] checked=new boolean[ids.size()];
+        for(int i=0;i<ids.size();i++){Sensor s=sensors.get(ids.get(i));labels[i]=(s==null?"BLE 心率设备":s.name)+"\n"+ids.get(i);checked[i]=true;}
+        new AlertDialog.Builder(this).setTitle("发现 "+ids.size()+" 台心率设备").setMultiChoiceItems(labels,checked,(dialog,which,isChecked)->checked[which]=isChecked)
+            .setPositiveButton("连接所选",(dialog,which)->{int delay=0;for(int i=0;i<ids.size();i++)if(checked[i]){final String id=ids.get(i);h.postDelayed(()->connect(id),delay);delay+=900;}})
+            .setNegativeButton("稍后",null).show();
+    }
+    ScanCallback scanCb=new ScanCallback(){@Override public void onScanResult(int type,ScanResult r){
+        BluetoothDevice dev=r.getDevice();String id;String name;
+        try{id=dev.getAddress();name=dev.getName();}catch(Exception e){return;}
+        if(gatts.containsKey(id)||scanFound.contains(id))return;
+        boolean hr=false;if(r.getScanRecord()!=null&&r.getScanRecord().getServiceUuids()!=null)
+            for(android.os.ParcelUuid u:r.getScanRecord().getServiceUuids())if(HR.equals(u.getUuid()))hr=true;
+        if(!hr)return;
+        scanFound.add(id);scanNames.put(id,name);
+        String saved=store.savedName(id);
+        Sensor sensor=new Sensor(id,saved==null?((name==null||name.isEmpty())?"小米手环 / BLE 心率设备":name):saved);
+        sensors.put(id,sensor);runOnUiThread(()->{renderSensors();refresh();});
+    }};
     void connect(String id){
         if(!permitted()){permissions();return;}
         Sensor sensor=sensors.get(id);if(sensor==null)return;
