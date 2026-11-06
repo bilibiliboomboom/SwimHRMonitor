@@ -96,6 +96,7 @@ public class MainActivity extends Activity {
     void connect(String id){
         if(!permitted()){permissions();return;}
         Sensor sensor=sensors.get(id);if(sensor==null)return;
+        if(activeSession.isEmpty())activeSession=store.newSession("自动监听",System.currentTimeMillis());
         userDisconnected.remove(id);
         Runnable pending=reconnectTasks.remove(id);if(pending!=null)h.removeCallbacks(pending);
         Runnable timeout=connectTimeouts.remove(id);if(timeout!=null)h.removeCallbacks(timeout);
