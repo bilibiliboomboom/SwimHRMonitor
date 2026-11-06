@@ -1,424 +1,101 @@
 package com.swimhr.monitor;
 
 import android.Manifest;
-import android.app.Activity;
-import android.app.AlertDialog;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothStatusCodes;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothGatt;
-import android.bluetooth.BluetoothGattCallback;
-import android.bluetooth.BluetoothGattCharacteristic;
-import android.bluetooth.BluetoothGattDescriptor;
-import android.bluetooth.BluetoothGattService;
-import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothProfile;
-import android.bluetooth.le.BluetoothLeScanner;
-import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanResult;
-import android.content.Context;
+import android.app.*;
+import android.bluetooth.*;
+import android.bluetooth.le.*;
+import android.content.*;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
-import android.graphics.Typeface;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.view.Gravity;
-import android.view.View;
-import android.view.WindowManager;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.GridLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.TextView;
-import android.widget.Toast;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import android.database.Cursor;
+import android.database.sqlite.*;
+import android.graphics.*;
+import android.net.Uri;
+import android.os.*;
+import android.provider.DocumentsContract;
+import android.view.*;
+import android.widget.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.zip.*;
 
 public class MainActivity extends Activity {
-    private static final UUID HEART_RATE_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
-    private static final UUID HEART_RATE_MEASUREMENT = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb");
-    private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final int REQ_PERMISSIONS = 77;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Map<String, BluetoothGatt> gatts = new HashMap<>();
-    private final Map<String, DeviceCard> cards = new HashMap<>();
-    private final Set<String> connecting = new HashSet<>();
-    private BluetoothAdapter adapter;
-    private BluetoothLeScanner scanner;
-    private boolean scanning = false;
-    private LinearLayout root;
-    private GridLayout grid;
-    private TextView summary;
-    private Button scanButton;
-    private Button timerButton;
-    private long timerStartedAt = 0L;
-    private boolean timerRunning = false;
-    private final Runnable timerTicker = new Runnable() {
-        @Override public void run() {
-            if (timerRunning) {
-                timerButton.setText("训练计时  " + formatElapsed(System.currentTimeMillis() - timerStartedAt));
-                handler.postDelayed(this, 1000);
-            }
-        }
-    };
-
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-        BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        adapter = manager == null ? null : manager.getAdapter();
-        buildUi();
-        requestBlePermissions();
+    static final UUID HR=UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb"), MEAS=UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb"), CCCD=UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"), BAT=UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb"), LEVEL=UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb");
+    final Handler h=new Handler(Looper.getMainLooper());
+    final Map<String,BluetoothGatt> gatts=new LinkedHashMap<>();
+    final Map<String,Sensor> sensors=new LinkedHashMap<>();
+    final Map<String,ArrayList<Point>> live=new LinkedHashMap<>();
+    final ArrayList<String> scanFound=new ArrayList<>();
+    BluetoothAdapter adapter; BluetoothLeScanner scanner; boolean scanning=false, aligned=false;
+    long alignedStart=0; String activeSession=""; Store store; LinearLayout root,deviceBox; TextView summary,clock; Button scanBtn,recordBtn; Curve curve; TabHost tabs;
+    static class Point { long t; int bpm; Point(long t,int b){this.t=t;this.bpm=b;} }
+    static class Sensor { String id,name; int bpm=-1,battery=-1; long last=0; String state="未连接"; Sensor(String i,String n){id=i;name=n;} }
+    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(128);setRequestedOrientation(0);store=new Store(this); BluetoothManager bm=(BluetoothManager)getSystemService(BLUETOOTH_SERVICE);adapter=bm==null?null:bm.getAdapter(); build(); permissions(); }
+    int d(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
+    TextView label(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(Color.rgb(30,43,59));return t;}
+    Button button(String s){Button b=new Button(this);b.setText(s);b.setAllCaps(false);b.setTextSize(13);return b;}
+    LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
+    LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    void build(){
+        root=column();root.setPadding(d(12),d(8),d(12),d(8));root.setBackgroundColor(Color.rgb(242,245,249));
+        LinearLayout top=row();TextView title=label("SWIM HR  多设备心率监测",21);title.setTypeface(null,1);top.addView(title,new LinearLayout.LayoutParams(0,-2,1));clock=label("00:00",13);top.addView(clock);root.addView(top);
+        summary=label("正在初始化…",12);root.addView(summary);
+        LinearLayout actions=row();scanBtn=button("扫描设备");scanBtn.setOnClickListener(v->scan());actions.addView(scanBtn,new LinearLayout.LayoutParams(0,d(44),1));
+        recordBtn=button("开始同步记录");recordBtn.setOnClickListener(v->toggleAligned());actions.addView(recordBtn,new LinearLayout.LayoutParams(0,d(44),1));
+        Button menu=button("更多 ▾");menu.setOnClickListener(v->more());actions.addView(menu,new LinearLayout.LayoutParams(0,d(44),1));root.addView(actions);
+        ScrollView sv=new ScrollView(this);deviceBox=column();sv.addView(deviceBox);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
+        setContentView(root);renderSensors();refresh();
+        h.post(new Runnable(){public void run(){clock.setText(new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date()));h.postDelayed(this,1000);}});
     }
-
-    private void buildUi() {
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(8), dp(12), dp(8));
-        root.setBackgroundColor(Color.rgb(242, 245, 249));
-
-        TextView title = new TextView(this);
-        title.setText("游泳队 · 实时心率监测");
-        title.setTextSize(22);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setTextColor(Color.rgb(25, 42, 65));
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
-
-        summary = new TextView(this);
-        summary.setText("尚未连接设备");
-        summary.setTextSize(13);
-        summary.setTextColor(Color.DKGRAY);
-        summary.setPadding(0, dp(3), 0, dp(6));
-        root.addView(summary);
-
-        LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER_VERTICAL);
-        scanButton = makeButton("开始扫描");
-        scanButton.setOnClickListener(v -> { if (scanning) stopScan(); else startScan(); });
-        controls.addView(scanButton, weighted());
-        Button clear = makeButton("清除设备");
-        clear.setOnClickListener(v -> clearDevices());
-        controls.addView(clear, weighted());
-        timerButton = makeButton("开始训练计时");
-        timerButton.setOnClickListener(v -> toggleTimer());
-        controls.addView(timerButton, weighted());
-        root.addView(controls, new LinearLayout.LayoutParams(-1, dp(46)));
-
-        ScrollView scroll = new ScrollView(this);
-        grid = new GridLayout(this);
-        grid.setColumnCount(2);
-        grid.setUseDefaultMargins(false);
-        scroll.addView(grid, new ScrollView.LayoutParams(-1, -2));
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
-        setContentView(root);
-        refreshSummary();
+    void permissions(){ArrayList<String> p=new ArrayList<>();if(Build.VERSION.SDK_INT>=31){if(checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)!=0)p.add(Manifest.permission.BLUETOOTH_SCAN);if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=0)p.add(Manifest.permission.BLUETOOTH_CONNECT);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=0)p.add(Manifest.permission.POST_NOTIFICATIONS);}else if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=0)p.add(Manifest.permission.ACCESS_FINE_LOCATION);if(!p.isEmpty())requestPermissions(p.toArray(new String[0]),88);}
+    boolean permitted(){return Build.VERSION.SDK_INT>=31?checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)==0&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==0:checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==0;}
+    void scan(){if(scanning){stopScan();return;}if(!permitted()){permissions();return;}if(adapter==null||!adapter.isEnabled()){toast("请打开蓝牙");return;}scanner=adapter.getBluetoothLeScanner();if(scanner==null){toast("无法启动 BLE 扫描");return;}scanFound.clear();try{scanner.startScan(scanCb);scanning=true;scanBtn.setText("停止扫描");toast("正在搜索标准心率设备");h.postDelayed(()->{if(scanning)stopScan();},15000);}catch(Exception e){toast("扫描失败："+e.getMessage());}}
+    void stopScan(){try{if(scanner!=null&&scanning)scanner.stopScan(scanCb);}catch(Exception ignored){}scanning=false;scanBtn.setText("扫描设备");}
+    ScanCallback scanCb=new ScanCallback(){@Override public void onScanResult(int type,ScanResult r){BluetoothDevice dev=r.getDevice();String id;String name;try{id=dev.getAddress();name=dev.getName();}catch(Exception e){return;}if(gatts.containsKey(id)||scanFound.contains(id))return;boolean hr=false;if(r.getScanRecord()!=null&&r.getScanRecord().getServiceUuids()!=null)for(android.os.ParcelUuid u:r.getScanRecord().getServiceUuids())if(HR.equals(u.getUuid()))hr=true;if(!hr)return;scanFound.add(id);Sensor s=new Sensor(id,(name==null||name.isEmpty())?"BLE 心率设备":name);sensors.put(id,s);runOnUiThread(()->showFound(s));}};
+    void showFound(Sensor s){new AlertDialog.Builder(this).setTitle("发现心率设备").setMessage(s.name+"\n"+s.id+"\n是否连接？").setPositiveButton("连接",(a,b)->connect(s.id)).setNegativeButton("稍后",null).show();renderSensors();refresh();}
+    void connect(String id){if(!permitted())return;Sensor s=sensors.get(id);if(s==null)return;try{BluetoothDevice dev=adapter.getRemoteDevice(id);BluetoothGatt g=Build.VERSION.SDK_INT>=23?dev.connectGatt(this,false,new Gatt(id),BluetoothDevice.TRANSPORT_LE):dev.connectGatt(this,false,new Gatt(id));if(g!=null){gatts.put(id,g);s.state="正在连接";}else s.state="连接失败";}catch(Exception e){s.state="连接失败";}renderSensors();refresh();}
+    class Gatt extends BluetoothGattCallback {final String id;Gatt(String i){id=i;}
+        public void onConnectionStateChange(BluetoothGatt g,int status,int state){runOnUiThread(()->{Sensor s=sensors.get(id);if(s==null)return;if(state==BluetoothProfile.STATE_CONNECTED&&status==0){s.state="已连接 / 正在订阅";try{g.discoverServices();}catch(Exception e){s.state="服务发现失败";}}else if(state==BluetoothProfile.STATE_DISCONNECTED){s.state="已断开";gatts.remove(id);try{g.close();}catch(Exception ignored){}renderSensors();refresh();}});}
+        public void onServicesDiscovered(BluetoothGatt g,int status){if(status!=0)return;BluetoothGattService service=g.getService(HR);BluetoothGattCharacteristic c=service==null?null:service.getCharacteristic(MEAS);if(c==null){setState(id,"不支持标准心率特征");return;}try{g.setCharacteristicNotification(c,true);BluetoothGattDescriptor desc=c.getDescriptor(CCCD);if(desc==null){setState(id,"缺少通知描述符");return;}desc.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);if(Build.VERSION.SDK_INT>=33)g.writeDescriptor(desc,BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);else g.writeDescriptor(desc);BluetoothGattService bs=g.getService(BAT);if(bs!=null){BluetoothGattCharacteristic bc=bs.getCharacteristic(LEVEL);if(bc!=null)g.readCharacteristic(bc);}}catch(Exception e){setState(id,"订阅失败");}}
+        public void onDescriptorWrite(BluetoothGatt g,BluetoothGattDescriptor d,int st){if(CCCD.equals(d.getUuid()))setState(id,st==0?"已连接 / 等待心率":"通知订阅失败");}
+        public void onCharacteristicChanged(BluetoothGatt g,BluetoothGattCharacteristic c){if(MEAS.equals(c.getUuid()))parse(id,c.getValue());}
+        public void onCharacteristicChanged(BluetoothGatt g,BluetoothGattCharacteristic c,byte[] value){if(MEAS.equals(c.getUuid()))parse(id,value);}
+        public void onCharacteristicRead(BluetoothGatt g,BluetoothGattCharacteristic c,int status){if(status==0&&LEVEL.equals(c.getUuid())){byte[] v=c.getValue();if(v!=null&&v.length>0){Sensor s=sensors.get(id);if(s!=null){s.battery=v[0]&255;runOnUiThread(()->renderSensors());}}}}
     }
-
-    private LinearLayout.LayoutParams weighted() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), 1f);
-        p.setMargins(dp(3), 0, dp(3), 0);
-        return p;
-    }
-
-    private Button makeButton(String label) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextSize(13);
-        b.setAllCaps(false);
-        return b;
-    }
-
-    private int dp(float value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
-
-    private void requestBlePermissions() {
-        ArrayList<String> needed = new ArrayList<>();
-        if (Build.VERSION.SDK_INT >= 31) {
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) needed.add(Manifest.permission.BLUETOOTH_SCAN);
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) needed.add(Manifest.permission.BLUETOOTH_CONNECT);
-        } else if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        }
-        if (!needed.isEmpty()) requestPermissions(needed.toArray(new String[0]), REQ_PERMISSIONS);
-    }
-
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == REQ_PERMISSIONS) {
-            boolean ok = true;
-            for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) ok = false;
-            if (!ok) toast("需要蓝牙扫描和连接权限才能使用");
-        }
-    }
-
-    private boolean hasPermissions() {
-        if (Build.VERSION.SDK_INT >= 31) {
-            return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-                    && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
-        }
-        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void startScan() {
-        if (!hasPermissions()) { requestBlePermissions(); return; }
-        if (adapter == null || !adapter.isEnabled()) { toast("请先打开手机蓝牙"); return; }
-        scanner = adapter.getBluetoothLeScanner();
-        if (scanner == null) { toast("当前设备无法启动蓝牙扫描"); return; }
-        try {
-            scanner.startScan(scanCallback);
-            scanning = true;
-            scanButton.setText("停止扫描");
-            summary.setText("正在扫描心率设备… 已连接 " + gatts.size() + " 台");
-            handler.postDelayed(() -> { if (scanning) stopScan(); }, 20000);
-        } catch (SecurityException e) { toast("没有蓝牙扫描权限"); }
-    }
-
-    private void stopScan() {
-        if (scanner != null && scanning) {
-            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
-        }
-        scanning = false;
-        if (scanButton != null) scanButton.setText("开始扫描");
-        refreshSummary();
-    }
-
-    private final ScanCallback scanCallback = new ScanCallback() {
-        @Override public void onScanResult(int callbackType, ScanResult result) {
-            BluetoothDevice device = result.getDevice();
-            String address;
-            String name;
-            try {
-                address = device.getAddress();
-                name = device.getName();
-            } catch (SecurityException e) { return; }
-            if (address == null || gatts.containsKey(address) || connecting.contains(address)) return;
-            boolean advertisesHeartRate = result.getScanRecord() != null
-                    && result.getScanRecord().getServiceUuids() != null
-                    && result.getScanRecord().getServiceUuids().stream().anyMatch(u -> HEART_RATE_SERVICE.equals(u.getUuid()));
-            if (!advertisesHeartRate) return;
-            final String deviceName = (name == null || name.trim().isEmpty()) ? "心率设备" : name.trim();
-            connecting.add(address);
-            addCard(address, deviceName, "正在连接…");
-            try {
-                BluetoothGatt gatt;
-                if (Build.VERSION.SDK_INT >= 23) gatt = device.connectGatt(MainActivity.this, false, new HeartRateGattCallback(address), BluetoothDevice.TRANSPORT_LE);
-                else gatt = device.connectGatt(MainActivity.this, false, new HeartRateGattCallback(address));
-                if (gatt != null) gatts.put(address, gatt);
-                else { connecting.remove(address); setCardStatus(address, "连接失败"); }
-            } catch (SecurityException e) {
-                connecting.remove(address);
-                setCardStatus(address, "蓝牙权限不足");
-            }
-            refreshSummary();
-        }
-        @Override public void onScanFailed(int errorCode) {
-            scanning = false;
-            runOnUiThread(() -> { scanButton.setText("开始扫描"); toast("扫描失败，错误码 " + errorCode); });
-        }
-    };
-
-    private class HeartRateGattCallback extends BluetoothGattCallback {
-        private final String address;
-        HeartRateGattCallback(String address) { this.address = address; }
-
-        @Override public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-            if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                connecting.remove(address);
-                setCardStatus(address, "已连接，正在查找心率服务…");
-                try { gatt.discoverServices(); } catch (SecurityException e) { setCardStatus(address, "服务发现权限错误"); }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                connecting.remove(address);
-                gatts.remove(address);
-                setCardStatus(address, "已断开");
-                try { gatt.close(); } catch (Exception ignored) {}
-                refreshSummary();
-            } else if (status != BluetoothGatt.GATT_SUCCESS) {
-                connecting.remove(address);
-                setCardStatus(address, "连接异常 (" + status + ")");
-            }
-        }
-
-        @Override public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            if (status != BluetoothGatt.GATT_SUCCESS) { setCardStatus(address, "服务发现失败 (" + status + ")"); return; }
-            BluetoothGattService service = gatt.getService(HEART_RATE_SERVICE);
-            BluetoothGattCharacteristic characteristic = service == null ? null : service.getCharacteristic(HEART_RATE_MEASUREMENT);
-            if (characteristic == null) { setCardStatus(address, "未找到标准心率特征"); return; }
-            try {
-                boolean enabled = gatt.setCharacteristicNotification(characteristic, true);
-                BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
-                if (!enabled || descriptor == null) { setCardStatus(address, "开启心率通知失败"); return; }
-                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                boolean started;
-                if (Build.VERSION.SDK_INT >= 33) started = gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS;
-                else { started = gatt.writeDescriptor(descriptor); }
-                if (!started) setCardStatus(address, "通知订阅请求失败");
-                else setCardStatus(address, "已连接，等待心率数据…");
-            } catch (SecurityException e) { setCardStatus(address, "蓝牙权限错误"); }
-        }
-
-        @Override public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
-            if (CCCD.equals(descriptor.getUuid())) setCardStatus(address, status == BluetoothGatt.GATT_SUCCESS ? "心率通知已开启，等待数据…" : "心率通知开启失败 (" + status + ")");
-        }
-
-        @Override public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-            if (HEART_RATE_MEASUREMENT.equals(characteristic.getUuid())) {
-                byte[] value = characteristic.getValue();
-                if (value != null) handleHeartRate(address, value);
-            }
-        }
-
-        @Override public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, byte[] value) {
-            if (HEART_RATE_MEASUREMENT.equals(characteristic.getUuid()) && value != null) handleHeartRate(address, value);
-        }
-    }
-
-    private void handleHeartRate(String address, byte[] data) {
-        if (data.length < 2) return;
-        int flags = data[0] & 0xff;
-        int bpm;
-        if ((flags & 0x01) != 0) {
-            if (data.length < 3) return;
-            bpm = (data[1] & 0xff) | ((data[2] & 0xff) << 8);
-        } else bpm = data[1] & 0xff;
-        if (bpm <= 0 || bpm > 250) return;
-        runOnUiThread(() -> {
-            DeviceCard card = cards.get(address);
-            if (card != null) {
-                card.bpm.setText(String.valueOf(bpm));
-                card.status.setText("实时接收中 · " + new java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new java.util.Date()));
-                card.container.setBackgroundColor(Color.rgb(225, 246, 235));
-            }
-            refreshSummary();
-        });
-    }
-
-    private void addCard(String address, String deviceName, String status) {
-        runOnUiThread(() -> {
-            if (cards.containsKey(address)) return;
-            DeviceCard card = new DeviceCard(address, deviceName);
-            card.status.setText(status);
-            cards.put(address, card);
-            int width = getResources().getDisplayMetrics().widthPixels;
-            int columns = width >= dp(900) ? 3 : 2;
-            grid.setColumnCount(columns);
-            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = 0;
-            lp.height = dp(116);
-            lp.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
-            lp.setMargins(dp(4), dp(4), dp(4), dp(4));
-            grid.addView(card.container, lp);
-            refreshSummary();
-        });
-    }
-
-    private class DeviceCard {
-        final LinearLayout container;
-        final TextView name;
-        final TextView bpm;
-        final TextView status;
-        final String address;
-        DeviceCard(String address, String deviceName) {
-            this.address = address;
-            container = new LinearLayout(MainActivity.this);
-            container.setOrientation(LinearLayout.VERTICAL);
-            container.setPadding(dp(12), dp(8), dp(12), dp(8));
-            container.setBackgroundColor(Color.WHITE);
-            name = new TextView(MainActivity.this);
-            name.setText(deviceName);
-            name.setTextSize(15);
-            name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-            name.setTextColor(Color.rgb(35, 48, 65));
-            bpm = new TextView(MainActivity.this);
-            bpm.setText("--");
-            bpm.setTextSize(30);
-            bpm.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-            bpm.setTextColor(Color.rgb(20, 110, 75));
-            status = new TextView(MainActivity.this);
-            status.setTextSize(11);
-            status.setTextColor(Color.DKGRAY);
-            container.addView(name);
-            container.addView(bpm);
-            container.addView(status);
-            container.setOnLongClickListener(v -> { renameDevice(address); return true; });
-        }
-    }
-
-    private void renameDevice(String address) {
-        DeviceCard card = cards.get(address);
-        if (card == null) return;
-        EditText input = new EditText(this);
-        input.setText(card.name.getText());
-        new AlertDialog.Builder(this).setTitle("修改运动员姓名").setView(input)
-                .setPositiveButton("保存", (d, w) -> card.name.setText(input.getText().toString().trim().isEmpty() ? "运动员" : input.getText().toString().trim()))
-                .setNegativeButton("取消", null).show();
-    }
-
-    private void setCardStatus(String address, String text) {
-        runOnUiThread(() -> {
-            DeviceCard card = cards.get(address);
-            if (card != null) {
-                card.status.setText(text);
-                if (text.contains("失败") || text.contains("断开") || text.contains("异常")) card.container.setBackgroundColor(Color.rgb(255, 235, 235));
-            }
-            refreshSummary();
-        });
-    }
-
-    private void clearDevices() {
-        stopScan();
-        for (BluetoothGatt gatt : new ArrayList<>(gatts.values())) {
-            try { gatt.disconnect(); } catch (Exception ignored) {}
-            try { gatt.close(); } catch (Exception ignored) {}
-        }
-        gatts.clear();
-        connecting.clear();
-        cards.clear();
-        grid.removeAllViews();
-        refreshSummary();
-    }
-
-    private void toggleTimer() {
-        if (!timerRunning) {
-            timerRunning = true;
-            timerStartedAt = System.currentTimeMillis();
-            timerButton.setText("训练计时  00:00:00");
-            handler.post(timerTicker);
-        } else {
-            timerRunning = false;
-            handler.removeCallbacks(timerTicker);
-            timerButton.setText("重新开始计时");
-        }
-    }
-
-    private String formatElapsed(long ms) {
-        long sec = ms / 1000;
-        return String.format(Locale.getDefault(), "%02d:%02d:%02d", sec / 3600, (sec / 60) % 60, sec % 60);
-    }
-
-    private void refreshSummary() {
-        if (summary != null) summary.setText("设备 " + cards.size() + " 台  ·  已建立连接 " + gatts.size() + " 台  ·  长按卡片可修改姓名");
-    }
-
-    private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); }
-
-    @Override protected void onDestroy() {
-        stopScan();
-        handler.removeCallbacksAndMessages(null);
-        for (BluetoothGatt gatt : new ArrayList<>(gatts.values())) {
-            try { gatt.disconnect(); } catch (Exception ignored) {}
-            try { gatt.close(); } catch (Exception ignored) {}
-        }
-        gatts.clear();
-        super.onDestroy();
+    void setState(String id,String state){runOnUiThread(()->{Sensor s=sensors.get(id);if(s!=null)s.state=state;renderSensors();refresh();});}
+    void parse(String id,byte[] v){if(v==null||v.length<2)return;int flags=v[0]&255;int bpm=(flags&1)!=0&&v.length>=3?((v[1]&255)|((v[2]&255)<<8)):(v[1]&255);if(bpm<1||bpm>250)return;long now=System.currentTimeMillis();Sensor s=sensors.get(id);if(s==null)return;s.bpm=bpm;s.last=now;s.state="实时接收";store.sample(activeSession,id,s.name,now,bpm);ArrayList<Point> list=live.computeIfAbsent(id,k->new ArrayList<>());list.add(new Point(now,bpm));while(list.size()>180)list.remove(0);runOnUiThread(()->{renderSensors();if(curve!=null)curve.invalidate();refresh();});}
+    void renderSensors(){if(deviceBox==null)return;deviceBox.removeAllViews();for(Sensor s:sensors.values()){LinearLayout card=column();card.setPadding(d(12),d(8),d(12),d(8));card.setBackgroundColor(s.bpm>0&&System.currentTimeMillis()-s.last<10000?Color.rgb(224,246,235):Color.WHITE);LinearLayout line=row();TextView nm=label(s.name,16);nm.setTypeface(null,1);line.addView(nm,new LinearLayout.LayoutParams(0,-2,1));TextView bpm=label(s.bpm<0?"--":s.bpm+" BPM",27);bpm.setTextColor(Color.rgb(15,125,82));bpm.setTypeface(null,1);line.addView(bpm);card.addView(line);String detail=s.state+"   ·   "+s.id+(s.battery>=0?"   ·   电量 "+s.battery+"%":"");card.addView(label(detail,11));LinearLayout buttons=row();Button rename=button("改名");rename.setOnClickListener(v->rename(s));buttons.addView(rename);Button disconnect=button(gatts.containsKey(s.id)?"断开":"连接");disconnect.setOnClickListener(v->{if(gatts.containsKey(s.id))disconnect(s.id);else connect(s.id);});buttons.addView(disconnect);Button remove=button("移除");remove.setOnClickListener(v->{disconnect(s.id);sensors.remove(s.id);live.remove(s.id);renderSensors();refresh();});buttons.addView(remove);card.addView(buttons);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,d(5),0,d(5));deviceBox.addView(card,cp);}if(sensors.isEmpty()){TextView empty=label("尚未添加设备。点击「扫描设备」搜索支持 BLE 0x180D 的心率传感器。",15);empty.setPadding(d(16),d(30),d(16),d(30));deviceBox.addView(empty);}}
+    void rename(Sensor s){EditText e=new EditText(this);e.setText(s.name);new AlertDialog.Builder(this).setTitle("运动员 / 设备名称").setView(e).setPositiveButton("保存",(a,b)->{s.name=e.getText().toString().trim();if(s.name.isEmpty())s.name="运动员";store.rename(s.id,s.name);renderSensors();}).setNegativeButton("取消",null).show();}
+    void disconnect(String id){BluetoothGatt g=gatts.remove(id);if(g!=null){try{g.disconnect();g.close();}catch(Exception ignored){}}Sensor s=sensors.get(id);if(s!=null){s.state="已断开";s.bpm=-1;}renderSensors();refresh();}
+    void toggleAligned(){if(!aligned){if(gatts.size()<2){toast("至少连接两台设备才能开始同步对比记录");return;}aligned=true;alignedStart=System.currentTimeMillis();activeSession=store.newSession("同步对比",alignedStart);recordBtn.setText("停止同步记录");toast("同步记录已开始");}else{aligned=false;store.endSession(activeSession,System.currentTimeMillis());recordBtn.setText("开始同步记录");new AlertDialog.Builder(this).setTitle("记录已保存").setMessage("本次同步记录已保存在本机。").setItems(new String[]{"导出 Excel","导出 CSV","分析数据","查看历史","完成"},(a,w)->{if(w==0)export(true);else if(w==1)export(false);else if(w==2)analysis();else if(w==3)history();}).show();}}
+    void more(){String[] items={"实时曲线","历史记录","数据分析","导出 CSV","导出 Excel","断开全部设备","关于 / 使用说明"};new AlertDialog.Builder(this).setTitle("功能").setItems(items,(a,w)->{if(w==0)showCurve();if(w==1)history();if(w==2)analysis();if(w==3)export(false);if(w==4)export(true);if(w==5){for(String id:new ArrayList<>(gatts.keySet()))disconnect(id);}if(w==6)new AlertDialog.Builder(this).setTitle("SWIM HR").setMessage("支持标准 BLE 心率服务 0x180D。单设备连接后自动记录；两台及以上设备可启动同步对比记录。数据默认保存在本机。仅用于训练观察和设备评估，不用于医疗诊断。").setPositiveButton("知道了",null).show();}).show();}
+    void showCurve(){LinearLayout box=column();curve=new Curve(this);box.addView(curve,new LinearLayout.LayoutParams(-1,d(310)));new AlertDialog.Builder(this).setTitle("实时心率曲线").setView(box).setPositiveButton("关闭",null).show();}
+    class Curve extends View{Paint p=new Paint(3);Curve(Context c){super(c);}protected void onDraw(Canvas c){super.onDraw(c);float w=getWidth(),hh=getHeight();p.setColor(Color.WHITE);c.drawRect(0,0,w,hh,p);p.setColor(0xffd9e0e8);p.setStrokeWidth(1);for(int i=0;i<5;i++){float y=20+i*(hh-40)/4;c.drawLine(40,y,w-8,y,p);}p.setColor(0xff526273);p.setTextSize(11);for(int i=0;i<5;i++)c.drawText(""+(200-i*40),4,24+i*(hh-40)/4,p);int[] colors={0xff16865d,0xff2878c8,0xffe28b27,0xffa34fc1,0xffd14f58,0xff269ca5};int ix=0;for(ArrayList<Point> pts:live.values()){if(pts.size()<2){ix++;continue;}p.setColor(colors[ix++%colors.length]);p.setStrokeWidth(2.5f);long min=pts.get(0).t,max=pts.get(pts.size()-1).t;for(int j=1;j<pts.size();j++){Point a=pts.get(j-1),b=pts.get(j);float x1=40+(a.t-min)/(float)Math.max(1,max-min)*(w-55),x2=40+(b.t-min)/(float)Math.max(1,max-min)*(w-55);float y1=hh-15-a.bpm/220f*(hh-30),y2=hh-15-b.bpm/220f*(hh-30);c.drawLine(x1,y1,x2,y2,p);}}}}
+    void history(){ArrayList<String> rows=store.sessions();if(rows.isEmpty()){toast("暂无历史记录");return;}new AlertDialog.Builder(this).setTitle("历史训练记录").setItems(rows.toArray(new String[0]),(a,w)->{String id=rows.get(w).split("  ")[0];activeSession=id;analysis();}).setNegativeButton("关闭",null).show();}
+    void analysis(){ArrayList<String> ids=new ArrayList<>(sensors.keySet());if(ids.size()<2){ids=store.deviceIds(activeSession);}if(ids.size()<2){toast("至少需要两台设备的数据");return;}String[] names=new String[ids.size()];for(int i=0;i<ids.size();i++){Sensor s=sensors.get(ids.get(i));names[i]=s==null?ids.get(i):s.name;}new AlertDialog.Builder(this).setTitle("选择参考设备").setItems(names,(a,w)->{String ref=ids.get(w);String other=ids.get(w==0?1:0);Stats st=store.compare(activeSession,ref,other);if(st.n<3){toast("有效配对样本不足（至少3组）");return;}String msg="样本数："+st.n+"\nPearson 相关系数 r："+String.format(Locale.US,"%.4f",st.r)+"\n平均差值（A-B）："+String.format(Locale.US,"%.2f",st.bias)+" BPM\n95% 一致性界限："+String.format(Locale.US,"%.2f",st.low)+" 至 "+String.format(Locale.US,"%.2f",st.high)+" BPM\n\nPearson 衡量线性相关；Bland-Altman 衡量一致性。结果受采样频率和时间对齐影响。";new AlertDialog.Builder(this).setTitle("设备对比分析").setMessage(msg).setPositiveButton("确定",null).show();}).setNegativeButton("取消",null).show();}
+    static class Stats{int n;double r,bias,low,high;}
+    void export(boolean xlsx){String mime=xlsx?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"text/csv";String name="swimhr_"+new SimpleDateFormat("yyyyMMdd_HHmmss",Locale.US).format(new Date())+(xlsx?".xlsx":".csv");Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType(mime);i.putExtra(Intent.EXTRA_TITLE,name);exportXlsx=xlsx;startActivityForResult(i,91);}
+    boolean exportXlsx=false;
+    @Override protected void onActivityResult(int req,int res,Intent data){super.onActivityResult(req,res,data);if(req==91&&res==RESULT_OK&&data!=null){try{OutputStream out=getContentResolver().openOutputStream(data.getData());if(exportXlsx)writeXlsx(out);else writeCsv(out);out.close();toast("导出完成");}catch(Exception e){toast("导出失败："+e.getMessage());}}}
+    void writeCsv(OutputStream out)throws Exception{StringBuilder b=new StringBuilder("session_id,timestamp,device_id,device_name,bpm\n");Cursor c=store.getReadableDatabase().rawQuery("SELECT session_id,ts,device_id,name,bpm FROM samples ORDER BY ts",null);while(c.moveToNext())b.append(csv(c.getString(0))).append(',').append(c.getLong(1)).append(',').append(csv(c.getString(2))).append(',').append(csv(c.getString(3))).append(',').append(c.getInt(4)).append('\n');c.close();out.write(b.toString().getBytes("UTF-8"));}
+    String csv(String s){return "\""+(s==null?"":s.replace("\"","\\""))+"\"";}
+    void writeXlsx(OutputStream out)throws Exception{ByteArrayOutputStream data=new ByteArrayOutputStream();writeCsv(data);String csv=data.toString("UTF-8");String[] lines=csv.split("\n");ZipOutputStream z=new ZipOutputStream(out);put(z,"[Content_Types].xml","<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/></Types>");put(z,"_rels/.rels","<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");put(z,"xl/workbook.xml","<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"HeartRate\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");put(z,"xl/_rels/workbook.xml.rels","<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>");StringBuilder sh=new StringBuilder("<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");for(int r=0;r<lines.length;r++){sh.append("<row r=\"").append(r+1).append("\">");String[] cells=lines[r].split(",(?=(?:[^\\"]*\"[^\\"]*\")*[^\\"]*$)",-1);for(int col=0;col<cells.length;col++){String ref=colName(col+1)+(r+1);String v=cells[col].replace("\"","");sh.append("<c r=\"").append(ref).append("\" t=\"inlineStr\"><is><t>").append(xml(v)).append("</t></is></c>");}sh.append("</row>");}sh.append("</sheetData></worksheet>");put(z,"xl/worksheets/sheet1.xml",sh.toString());z.finish();}
+    void put(ZipOutputStream z,String n,String v)throws Exception{z.putNextEntry(new ZipEntry(n));z.write(v.getBytes("UTF-8"));z.closeEntry();}
+    String xml(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
+    String colName(int n){String s="";while(n>0){int r=(n-1)%26;s=(char)('A'+r)+s;n=(n-1)/26;}return s;}
+    void refresh(){int active=0;for(Sensor s:sensors.values())if(s.bpm>0&&System.currentTimeMillis()-s.last<10000)active++;summary.setText("已发现 "+sensors.size()+" 台  ·  已连接 "+gatts.size()+" 台  ·  正在接收 "+active+" 台"+(aligned?"  ·  ● 同步记录中":""));}
+    void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
+    @Override protected void onDestroy(){stopScan();for(BluetoothGatt g:new ArrayList<>(gatts.values())){try{g.disconnect();g.close();}catch(Exception ignored){}}super.onDestroy();}
+    class Store extends SQLiteOpenHelper{
+        Store(Context c){super(c,"swimhr.db",null,2);}
+        public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,start INTEGER,end INTEGER DEFAULT 0)");db.execSQL("CREATE TABLE samples(_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,ts INTEGER,device_id TEXT,name TEXT,bpm INTEGER)");db.execSQL("CREATE INDEX sample_session_time ON samples(session_id,ts)");db.execSQL("CREATE TABLE names(device_id TEXT PRIMARY KEY,name TEXT)");}
+        public void onUpgrade(SQLiteDatabase db,int a,int b){}
+        String newSession(String title,long t){String id=UUID.randomUUID().toString();ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("start",t);getWritableDatabase().insert("sessions",null,v);return id;}
+        void endSession(String id,long t){ContentValues v=new ContentValues();v.put("end",t);getWritableDatabase().update("sessions",v,"id=?",new String[]{id});}
+        void sample(String sid,String did,String name,long t,int bpm){if(sid==null||sid.isEmpty())return;ContentValues v=new ContentValues();v.put("session_id",sid);v.put("ts",t);v.put("device_id",did);v.put("name",name);v.put("bpm",bpm);getWritableDatabase().insert("samples",null,v);}
+        void rename(String id,String n){ContentValues v=new ContentValues();v.put("device_id",id);v.put("name",n);getWritableDatabase().insertWithOnConflict("names",null,v,SQLiteDatabase.CONFLICT_REPLACE);}
+        ArrayList<String> sessions(){ArrayList<String>a=new ArrayList<>();Cursor c=getReadableDatabase().rawQuery("SELECT id,title,start FROM sessions ORDER BY start DESC",null);while(c.moveToNext())a.add(c.getString(0)+"  "+c.getString(1)+"  "+new SimpleDateFormat("MM-dd HH:mm",Locale.getDefault()).format(new Date(c.getLong(2))));c.close();return a;}
+        ArrayList<String> deviceIds(String sid){ArrayList<String>a=new ArrayList<>();Cursor c=getReadableDatabase().rawQuery("SELECT DISTINCT device_id FROM samples WHERE session_id=? ORDER BY device_id",new String[]{sid==null?"":sid});while(c.moveToNext())a.add(c.getString(0));c.close();return a;}
+        Stats compare(String sid,String a,String b){Stats s=new Stats();ArrayList<Integer>x=new ArrayList<>(),y=new ArrayList<>();Cursor c=getReadableDatabase().rawQuery("SELECT a.bpm,b.bpm FROM samples a JOIN samples b ON ABS(a.ts-b.ts)<=2000 WHERE a.session_id=? AND b.session_id=? AND a.device_id=? AND b.device_id=? GROUP BY a._id ORDER BY a.ts",new String[]{sid,sid,a,b});while(c.moveToNext()){x.add(c.getInt(0));y.add(c.getInt(1));}c.close();s.n=x.size();if(s.n<2)return s;double mx=0,my=0;for(int i=0;i<s.n;i++){mx+=x.get(i);my+=y.get(i);}mx/=s.n;my/=s.n;double cov=0,vx=0,vy=0,diff=0,ds=0;for(int i=0;i<s.n;i++){double dx=x.get(i)-mx,dy=y.get(i)-my,dd=x.get(i)-y.get(i);cov+=dx*dy;vx+=dx*dx;vy+=dy*dy;diff+=dd;ds+=dd*dd;}s.r=vx*vy==0?0:cov/Math.sqrt(vx*vy);s.bias=diff/s.n;double sd=Math.sqrt(Math.max(0,(ds-diff*diff/s.n)/(s.n-1)));s.low=s.bias-1.96*sd;s.high=s.bias+1.96*sd;return s;}
     }
 }
