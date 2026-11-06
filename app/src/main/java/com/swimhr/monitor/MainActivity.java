@@ -36,7 +36,22 @@ public class MainActivity extends Activity {
     long alignedStart=0; volatile String activeSession=""; Store store; LinearLayout root; GridLayout deviceBox; TextView summary,clock; int gridColumns=2; Button scanBtn,recordBtn; Curve curve; TabHost tabs;
     static class Point { long t; int bpm; Point(long t,int b){this.t=t;this.bpm=b;} }
     static class Sensor { String id,name; int bpm=-1,battery=-1; long last=0; String state="未连接"; Sensor(String i,String n){id=i;name=n;} }
-    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(128);setRequestedOrientation(0);store=new Store(this); BluetoothManager bm=(BluetoothManager)getSystemService(BLUETOOTH_SERVICE);adapter=bm==null?null:bm.getAdapter(); build(); permissions(); }
+    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(128);applySavedOrientation();store=new Store(this); BluetoothManager bm=(BluetoothManager)getSystemService(BLUETOOTH_SERVICE);adapter=bm==null?null:bm.getAdapter(); build(); permissions(); }
+    static final String PREFS="swimhr_settings", PREF_ORIENTATION="screen_orientation";
+    void applySavedOrientation(){
+        int mode=getSharedPreferences(PREFS,MODE_PRIVATE).getInt(PREF_ORIENTATION,0);
+        setRequestedOrientation(mode==1?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }
+    void orientationSettings(){
+        final String[] options={"横屏显示（适合平板/泳池边监测）","竖屏显示（适合手机单手操作）"};
+        int current=getSharedPreferences(PREFS,MODE_PRIVATE).getInt(PREF_ORIENTATION,0);
+        new AlertDialog.Builder(this).setTitle("屏幕方向").setSingleChoiceItems(options,current,(dialog,which)->{
+            getSharedPreferences(PREFS,MODE_PRIVATE).edit().putInt(PREF_ORIENTATION,which).apply();
+            setRequestedOrientation(which==1?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            dialog.dismiss();
+            toast(which==1?"已切换为竖屏显示":"已切换为横屏显示");
+        }).setNegativeButton("关闭",null).show();
+    }
     int d(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
     TextView label(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(Color.rgb(30,43,59));return t;}
     Button button(String s){Button b=new Button(this);b.setText(s);b.setAllCaps(false);b.setTextSize(13);b.setMinHeight(0);b.setMinimumHeight(0);b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(d(8),0,d(8),0);if(Build.VERSION.SDK_INT>=21){b.setStateListAnimator(null);b.setElevation(0);}return b;}
@@ -256,7 +271,7 @@ public class MainActivity extends Activity {
         renderSensors();refresh();
     }
     void toggleAligned(){if(!aligned){if(gatts.size()<2){toast("至少连接两台设备才能开始同步对比记录");return;}aligned=true;alignedStart=System.currentTimeMillis();activeSession=store.newSession("同步对比",alignedStart);recordBtn.setText("停止同步记录");toast("同步记录已开始");}else{aligned=false;store.endSession(activeSession,System.currentTimeMillis());activeSession="";recordBtn.setText("开始同步记录");new AlertDialog.Builder(this).setTitle("记录已保存").setMessage("本次同步记录已保存在本机。").setItems(new String[]{"导出 Excel","导出 CSV","分析数据","查看历史","完成"},(a,w)->{if(w==0)export(true);else if(w==1)export(false);else if(w==2)analysis();else if(w==3)history();}).show();}}
-    void more(){String[] items={"实时曲线","历史记录","数据分析","导出 CSV","导出 Excel","断开全部设备","关于 / 使用说明"};new AlertDialog.Builder(this).setTitle("功能").setItems(items,(a,w)->{if(w==0)showCurve();if(w==1)history();if(w==2)analysis();if(w==3)export(false);if(w==4)export(true);if(w==5){for(String id:new ArrayList<>(gatts.keySet()))disconnect(id);}if(w==6)new AlertDialog.Builder(this).setTitle("SWIM HR").setMessage("支持标准 BLE 心率服务 0x180D。单设备连接后自动记录；两台及以上设备可启动同步对比记录。数据默认保存在本机。仅用于训练观察和设备评估，不用于医疗诊断。").setPositiveButton("知道了",null).show();}).show();}
+    void more(){String[] items={"屏幕方向：横屏 / 竖屏","实时曲线","历史记录","数据分析","导出 CSV","导出 Excel","断开全部设备","关于 / 使用说明"};new AlertDialog.Builder(this).setTitle("功能与设置").setItems(items,(a,w)->{if(w==0)orientationSettings();if(w==1)showCurve();if(w==2)history();if(w==3)analysis();if(w==4)export(false);if(w==5)export(true);if(w==6){for(String id:new ArrayList<>(gatts.keySet()))disconnect(id);}if(w==7)new AlertDialog.Builder(this).setTitle("SWIM HR").setMessage("支持标准 BLE 心率服务 0x180D。单设备连接后自动记录；两台及以上设备可启动同步对比记录。数据默认保存在本机。仅用于训练观察和设备评估，不用于医疗诊断。").setPositiveButton("知道了",null).show();}).show();}
     void showCurve(){LinearLayout box=column();curve=new Curve(this);box.addView(curve,new LinearLayout.LayoutParams(-1,d(310)));new AlertDialog.Builder(this).setTitle("实时心率曲线").setView(box).setPositiveButton("关闭",null).show();}
     class Curve extends View{
         final Paint p=new Paint(3);
