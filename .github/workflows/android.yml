@@ -4,7 +4,9 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'SwimHRMonitor-source.zip'
+      - 'app/**'
+      - '*.gradle'
+      - 'gradle.properties'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -14,49 +16,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Extract Android project
-        run: |
-          mkdir -p extracted
-          unzip -q SwimHRMonitor-source.zip -d extracted
-
-          PROJECT_DIR="$(find extracted -name settings.gradle -printf '%h\n' | head -n 1)"
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: settings.gradle not found"
-            find extracted -maxdepth 4 -type f
-            exit 1
-          fi
-
-          find "$PROJECT_DIR" -mindepth 1 -maxdepth 1 \
-            ! -name '.github' \
-            -exec cp -a {} . \;
-
-          echo "Project extracted from: $PROJECT_DIR"
-          ls -la
-
-      - name: Fix Android compile error
-        run: |
-          sed -i 's/View.SYSTEM_UI_FLAG_KEEP_SCREEN_ON/0/g' app/src/main/java/com/swimhr/monitor/MainActivity.java
       - name: Build debug APK
         run: |
           gradle --version
           gradle assembleDebug --stacktrace
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SwimHRMonitor-debug-apk
+          name: SwimHRMonitor-v2-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
